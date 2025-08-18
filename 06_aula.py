@@ -1,24 +1,18 @@
-import os
 import re
 import pickle
 import openai
 import streamlit as st
 from pathlib import Path
-from dotenv import load_dotenv
 from unidecode import unidecode
 
-load_dotenv()
-
-# API OPENAI ==============================================
-openai_key = os.getenv("OPENAI_API_KEY")
+PASTA_CONFIGURACOES = Path(__file__).parent / 'configuracoes'
+PASTA_CONFIGURACOES.mkdir(exist_ok=True)
 
 PASTA_MENSAGENS = Path(__file__).parent / 'mensagens'
 PASTA_MENSAGENS.mkdir(exist_ok=True)
 CACHE_DESCONVERTE_NOME_MENSAGEM = {}
 
-MODELO = "gpt-3.5-turbo"
-
-def retorna_resposta_modelo(mensagens,openai_key, modelo=MODELO, temperatura=0, stream=False):
+def retorna_resposta_modelo(mensagens,openai_key, modelo='gpt-3.5-turbo', temperatura=0, stream=False):
   openai.api_key = openai_key
   response = openai.ChatCompletion.create(
     model=modelo,
@@ -80,6 +74,20 @@ def listar_conversas():
   conversas = sorted(conversas, key=lambda item: item.stat().st_mtime_ns, reverse=True)
   return [c.stem for c in conversas] # c.stem => Apenas o nome do arquivo
 
+# SALVAR E LER APIKEY =======================================
+
+def salva_chave(chave):
+  with open(PASTA_CONFIGURACOES / 'chave', 'wb') as f:
+    pickle.dump(chave, f)
+
+def ler_chave():
+  if (PASTA_CONFIGURACOES / 'chave').exists():
+    with open(PASTA_CONFIGURACOES / 'chave', 'rb') as f:
+      return pickle.load(f)
+  else:
+    return ''
+
+
 # PÁGINAS ===================================================
 
 def inicializacao():
@@ -87,6 +95,10 @@ def inicializacao():
     st.session_state.mensagens = []
   if not 'conversa_atual' in st.session_state:
     st.session_state.conversa_atual = ''
+  if not 'modelo' in st.session_state:
+    st.session_state.modelo = 'gpt-3.5-turbo'
+  if not 'api_key' in st.session_state:
+    st.session_state.api_key = ler_chave()
 
 def pagina_principal():
 
@@ -100,26 +112,29 @@ def pagina_principal():
 
   prompt = st.chat_input("Fale com o chat")
   if prompt:
-    nova_mensagem = { "role": "user", "content": prompt }
-    chat = st.chat_message(nova_mensagem["role"])
-    chat.markdown(nova_mensagem["content"])
-    mensagens.append(nova_mensagem)
+    if st.session_state['api_key'] == '':
+      st.error('Adicione uma chave de api na aba de configurações')
+    else:
+      nova_mensagem = { "role": "user", "content": prompt }
+      chat = st.chat_message(nova_mensagem["role"])
+      chat.markdown(nova_mensagem["content"])
+      mensagens.append(nova_mensagem)
 
-    chat = st.chat_message("assistant")
-    placeholder = chat.empty() # quando escrever algo novo, ele apaga o anterior
-    placeholder.markdown("▌ ") # caso a resposta demore, o usuário verá o feedback como se o modelo estivesse pensando
-    resposta_completa = ""
-    respostas = retorna_resposta_modelo(mensagens, openai_key, stream=True)
-    for resposta in respostas:
-      resposta_completa += resposta.choices[0].delta.get("content", "")
-      placeholder.markdown(resposta_completa + "▌ ")
-    placeholder.markdown(resposta_completa) # é para deixar a última mensagem se o ▌ no final
+      chat = st.chat_message("assistant")
+      placeholder = chat.empty() # quando escrever algo novo, ele apaga o anterior
+      placeholder.markdown("▌ ") # caso a resposta demore, o usuário verá o feedback como se o modelo estivesse pensando
+      resposta_completa = ""
+      respostas = retorna_resposta_modelo(mensagens, st.session_state['api_key'], modelo=st.session_state['modelo'], stream=True)
+      for resposta in respostas:
+        resposta_completa += resposta.choices[0].delta.get("content", "")
+        placeholder.markdown(resposta_completa + "▌ ")
+      placeholder.markdown(resposta_completa) # é para deixar a última mensagem se o ▌ no final
 
-    nova_mensagem = { "role": "assistant", "content": resposta_completa }
-    mensagens.append(nova_mensagem)
+      nova_mensagem = { "role": "assistant", "content": resposta_completa }
+      mensagens.append(nova_mensagem)
 
-    st.session_state['mensagens'] = mensagens
-    salvar_mensagens(mensagens)
+      st.session_state['mensagens'] = mensagens
+      salvar_mensagens(mensagens)
 
 def tab_conversas(tab):
   tab.button('➕ Nova conversa', on_click=seleciona_conversa, args=('', ), use_container_width=True)
@@ -144,12 +159,22 @@ def seleciona_conversa(nome_arquivo):
     st.session_state.mensagens = mensagem # Seleciona a conversa específica	
   st.session_state['conversa_atual'] = nome_arquivo
 
+def tab_configuracoes(tab):
+  modelo_escolhido = tab.selectbox('Selecione o modelo', ['gpt-3.5-turbo', 'gpt-4'])
+  st.session_state['modelo'] = modelo_escolhido
+
+  chave = tab.text_input('Adicione sua api key', value=st.session_state['api_key'])
+  if chave != st.session_state['api_key']:
+    st.session_state['api_key'] = chave
+    salva_chave(chave)
+    tab.success('Chave salva com sucesso')
 
 def main():
   inicializacao()
   pagina_principal()
   tab1, tab2 =st.sidebar.tabs(['Conversas', 'Configurações'])
   tab_conversas(tab1)
+  tab_configuracoes(tab2)
 
 
 
